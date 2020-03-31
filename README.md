@@ -4,7 +4,10 @@
 ##Overview
 VivOAuthIMAP is a library to support OAuth for IMAP.  
 PHP's default library imap_open doesn't have support for OAuth.   
-So a quiick solution will be this library.  
+So a quiick solution will be this library.
+
+## Documentation IMAP
+   * https://tools.ietf.org/html/rfc3501  
 
 ###Features
 
@@ -74,11 +77,14 @@ So a quiick solution will be this library.
     }
 
 ##Requirement
-  * PHP Version > PHP 5.3+
+  * PHP Version > PHP 7.1+
   * PHP Extensions needs to enable 
     * php_openssl
     * php_curl
     * php_sockets
+  * Composer
+    * zbateson/mail-mime-parser": "^1.2"
+
 
 ##License
 ----
@@ -107,3 +113,7 @@ THE SOFTWARE.
 Author : Vivek Muthal  
 Email : vmuthal.18@gmail.com  
 Website : [www.vivsoftware.in](http://www.vivsoftware.in)
+
+Fork by : Anton Baranov  
+Email : helpmedalph@gmail.com  
+Website : [we-s.ru](http://we-s.ru)

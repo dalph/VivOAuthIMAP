@@ -1,12 +1,17 @@
 <?php
 
+use ParseMessageX;
+
 /**
  * Description of VIVOAuthIMAP
  * This is a Library to Support OAuth in IMAP
  * This is designed to work with Gmail
  * @author Vivek
+ * Fork:
+ * @author Anton Baranov helpmedalph@gmail.com
  */
-class VivOAuthIMAP {
+class VivOAuthIMAP
+{
 
     /**
      * @var string $host
@@ -36,56 +41,83 @@ class VivOAuthIMAP {
     /**
      * @var FilePointer $sock
      */
-    private $fp;
+    protected $fp;
 
     /**
      * Command Counter
      * @var string
      */
-    private $codeCounter = 1;
+    protected $codeCounter = 1;
 
     /**
      * If successfull login then set to true else false
      * @var boolean
      */
-    private $isLoggedIn = false;
+    protected $isLoggedIn = false;
+
+    protected $debug = false;
+    protected $_isConnectedToServer = false;
+    const USE_UID = true;
+
+    /**
+     * @return bool
+     */
+    public function isConnectedToServer(): bool
+    {
+        return $this->_isConnectedToServer;
+    }
+
+    /**
+     * @param bool $debug
+     */
+    public function setDebug(bool $debug)
+    {
+        $this->debug = $debug;
+        $this->_log('<pre>');
+    }
 
     /**
      * Connects to Host if successful returns true else false
-     * @return boolean
+     * @return bool
      */
-    private function connect() {
+    protected function _connect(): bool
+    {
+        $this->_log('connect: ' . $this->host . ':' . $this->port);
         $this->fp = fsockopen($this->host, $this->port, $errno, $errstr, 30);
-        if ($this->fp)
-            return true;
-        return false;
+        return $this->_isConnectedToServer = !!$this->fp;
     }
 
     /**
      * Closes the file pointer
      */
-    private function disconnect() {
+    protected function _disconnect()
+    {
         fclose($this->fp);
+        $this->_log('disconnect');
     }
 
     /**
      * Login with username password / access_token returns true if successful else false
      * @return boolean
      */
-    public function login() {
+    public function login()
+    {
 
-        if ($this->connect()) {
+        if ($this->_connect()) {
             $command = NULL;
             if (isset($this->username) && isset($this->password)) {
                 $command = "LOGIN $this->username $this->password";
             } else if (isset($this->username) && isset($this->accessToken)) {
-                $token = base64_encode("user=$this->username\1auth=Bearer $this->accessToken\1\1");
+                $str = "user=$this->username\1auth=Bearer $this->accessToken\1\1";
+//                var_dump($str);
+                $token = base64_encode($str);
+//                var_dump($token);
                 $command = "AUTHENTICATE XOAUTH2 $token";
             }
 
             if ($command != NULL) {
-                $this->writeCommannd("A" . $this->codeCounter, $command);
-                $response = $this->readResponse("A" . $this->codeCounter);
+                $this->_writeCommand("A" . $this->codeCounter, $command);
+                $response = $this->_readResponse("A" . $this->codeCounter);
 
                 if ($response[0][0] == "OK") { //Got Successful response
                     $this->isLoggedIn = true;
@@ -102,10 +134,11 @@ class VivOAuthIMAP {
     /**
      * Logout then disconnects
      */
-    public function logout() {
-        $this->writeCommannd("A" . $this->codeCounter, "LOGOUT");
-        $this->readResponse("A" . $this->codeCounter);
-        $this->disconnect();
+    public function logout()
+    {
+        $this->_writeCommand("A" . $this->codeCounter, "LOGOUT");
+        $this->_readResponse("A" . $this->codeCounter);
+        $this->_disconnect();
         $this->isLoggedIn = false;
     }
 
@@ -113,7 +146,8 @@ class VivOAuthIMAP {
      * Returns true if user is authenticated else false
      * @return boolean
      */
-    public function isAuthenticated() {
+    public function isAuthenticated()
+    {
         return $this->isLoggedIn;
     }
 
@@ -122,9 +156,10 @@ class VivOAuthIMAP {
      * @param integer $id
      * @return array
      */
-    public function getHeader($id) {
-        $this->writeCommannd("A" . $this->codeCounter, "FETCH $id RFC822.HEADER");
-        $response = $this->readResponse("A" . $this->codeCounter);
+    public function getHeader($id)
+    {
+        $this->_writeCommand("A" . $this->codeCounter, "FETCH $id RFC822.HEADER");
+        $response = $this->_readResponse("A" . $this->codeCounter);
 
         if ($response[0][0] == "OK") {
             $modifiedResponse = $response;
@@ -139,84 +174,89 @@ class VivOAuthIMAP {
      * Returns headers array
      * @param integer $from
      * @param integer $to
-     * @return Array
+     * @return array
      */
-    public function getHeaders($from, $to) {
-        $this->writeCommannd("A" . $this->codeCounter, "FETCH $from:$to RFC822.HEADER");
-        $response = $this->readResponse("A" . $this->codeCounter);
-        return $this->modifyResponse($response);
+    public function getHeaders($from, $to)
+    {
+        $response = $this->_writeAndRead("FETCH $from:$to RFC822.HEADER", true);
+        return $this->_modifyResponse($response);
     }
 
     /**
      * Fetch a single mail and return
      * @param integer $id
-     * @return Array
+     * @return array
      */
-    public function getMessage($id) {
-        $this->writeCommannd("A" . $this->codeCounter, "FETCH $id RFC822");
-        $response = $this->readResponse("A" . $this->codeCounter);
-        return $this->modifyResponse($response);
+    public function getMessage($id)
+    {
+        $command = "FETCH $id RFC822";
+        if (self::USE_UID) $command = "UID " . $command;
+        return $this->_writeAndRead($command, true);
     }
 
     /**
      * Returns mails array
      * @param integer $from
      * @param integer $to
-     * @retun Array
+     * @return array
      */
-    public function getMessages($from, $to) {
-        $this->writeCommannd("A" . $this->codeCounter, "FETCH $from:$to RFC822");
-        $response = $this->readResponse("A" . $this->codeCounter);
-        return $this->modifyResponse($response);
+    public function getMessages($from, $to)
+    {
+        $command = "FETCH $from:$to RFC822";
+        if (self::USE_UID) $command = "UID " . $command;
+        return $this->_writeAndRead($command, true);
     }
 
     /**
-	* Search in FROM ie. Email Address
-	* @param string $email
-	* @return Array
-	*/
-	public function searchFrom($email) {
-		$this->writeCommannd("A" . $this->codeCounter, "SEARCH FROM \"$email\"");
-		$response = $this->readResponse("A" . $this->codeCounter);		
-		//Fetch by ids got in response
-		$ids = explode(" ", trim($response[0][1]));		
-		unset($ids[0]);
-		unset($ids[1]);		
-		$ids = array_values($ids);
-		$stringIds = implode(",",$ids);		
-		$mails = $this->getMessage($stringIds);			
-		return $mails;
-	}
-	
+     * Search in FROM ie. Email Address
+     * @param string $email
+     * @return array
+     */
+    public function searchFrom($email)
+    {
+        $this->_writeCommand("A" . $this->codeCounter, "SEARCH FROM \"$email\"");
+        $response = $this->_readResponse("A" . $this->codeCounter);
+        //Fetch by ids got in response
+        $ids = explode(" ", trim($response[0][1]));
+        unset($ids[0]);
+        unset($ids[1]);
+        $ids = array_values($ids);
+        $stringIds = implode(",", $ids);
+        $mails = $this->getMessage($stringIds);
+        return $mails;
+    }
+
     /**
      * Selects inbox for further operations
      */
-    private function selectInbox() {
-        $this->writeCommannd("A" . $this->codeCounter, "EXAMINE INBOX");
-        $this->readResponse("A" . $this->codeCounter);
+    protected function selectInbox()
+    {
+        $this->_writeCommand("A" . $this->codeCounter, "EXAMINE INBOX");
+        $this->_readResponse("A" . $this->codeCounter);
     }
 
     /**
      * List all folders
-     * @return Array
+     * @return array
      */
-    public function listFolders() {
-        $this->writeCommannd("A" . $this->codeCounter, "LIST \"\" \"*\"");
-        $response = $this->readResponse("A" . $this->codeCounter);
+    public function listFolders()
+    {
+        $response = $this->_writeAndRead("LIST \"\" \"*\"");
         $line = $response[0][1];
         $statusString = explode("*", $line);
 
         $totalStrings = count($statusString);
 
-        $statusArray = Array();
-        $finalFolders = Array();
+        $finalFolders = array();
 
         for ($i = 1; $i < $totalStrings; $i++) {
+            $status = trim($statusString[$i]);
+            if (!$status) continue;
 
-            $statusArray[$i] = explode("\"/\" ", $statusString[$i]);
+            $status = explode("\"|\" ", $status);
 
-            if (!strpos($statusArray[$i][0], "\Noselect")) {
-                $folder = str_replace("\"", "", $statusArray[$i][1]);
+            if (!strpos($status[0], "\Noselect")) {
+                $folder = str_replace("\"", "", $status[1]);
                 array_push($finalFolders, $folder);
             }
         }
@@ -229,18 +269,16 @@ class VivOAuthIMAP {
      * @param string $folder
      * @return boolean
      */
-    public function selectFolder($folder) {
-        $this->writeCommannd("A" . $this->codeCounter, "EXAMINE \"$folder\"");
-        $response = $this->readResponse("A" . $this->codeCounter);
-        if ($response[0][0] == "OK") {
-            return true;
-        }
-        return false;
+    public function selectFolder(string $folder): bool
+    {
+        $this->_log('select folder = ' . $folder);
+        $response = $this->_writeAndRead("EXAMINE \"$folder\"");
+        return ($response[0][0] == "OK");
     }
 
-    public function totalMails($folder = "INBOX") {
-        $this->writeCommannd("A" . $this->codeCounter, "STATUS \"$folder\" (MESSAGES)");
-        $response = $this->readResponse("A" . $this->codeCounter);
+    public function totalMails($folder = "INBOX")
+    {
+        $response = $this->_writeAndRead("STATUS \"$folder\" (MESSAGES)");
 
         $line = $response[0][1];
         $splitMessage = explode("(", $line);
@@ -251,21 +289,21 @@ class VivOAuthIMAP {
     }
 
     /**
-    * The APPEND command appends the literal argument as a new message
-    *  to the end of the specified destination mailbox
-    *
-    * @param string $mailbox MANDATORY
-    * @param string $message MANDATORY
-    * @param string $flags OPTIONAL DEFAULT "(\Seen)"
-    * @param string $from OPTIONAL
-    * @param string $to OPTIONAL
-    * @param string $subject OPTIONAL
-    * @param string $messageId OPTIONAL DEFAULT uniqid()
-    * @param string $mimeVersion OPTIONAL DEFAULT "1.0"
-    * @param string $contentType OPTIONAL DEFAULT "TEXT/PLAIN;CHARSET=UTF-8"
-    *
-    * @return bool false if mandatory params are not set or empty or if command execution fails, otherwise true
-    */
+     * The APPEND command appends the literal argument as a new message
+     *  to the end of the specified destination mailbox
+     *
+     * @param string $mailbox MANDATORY
+     * @param string $message MANDATORY
+     * @param string $flags OPTIONAL DEFAULT "(\Seen)"
+     * @param string $from OPTIONAL
+     * @param string $to OPTIONAL
+     * @param string $subject OPTIONAL
+     * @param string $messageId OPTIONAL DEFAULT uniqid()
+     * @param string $mimeVersion OPTIONAL DEFAULT "1.0"
+     * @param string $contentType OPTIONAL DEFAULT "TEXT/PLAIN;CHARSET=UTF-8"
+     *
+     * @return bool false if mandatory params are not set or empty or if command execution fails, otherwise true
+     */
     public function appendMessage($mailbox, $message, $from = "", $to = "", $subject = "", $messageId = "", $mimeVersion = "", $contentType = "", $flags = "(\Seen)")
     {
         if (!isset($mailbox) || !strlen($mailbox)) return false;
@@ -295,8 +333,8 @@ class VivOAuthIMAP {
 
         $command = "APPEND \"$mailbox\" $flags {" . $size . "}" . $crlf . $composedMessage;
 
-        $this->writeCommannd("A" . $this->codeCounter, $command);
-        $response = $this->readResponse("A" . $this->codeCounter);
+        $this->_writeCommand("A" . $this->codeCounter, $command);
+        $response = $this->_readResponse("A" . $this->codeCounter);
 
         if ($response[0][0] == "OK") return true;
 
@@ -308,17 +346,20 @@ class VivOAuthIMAP {
      * @param string $code
      * @param string $command
      */
-    private function writeCommannd($code, $command) {
+    protected function _writeCommand($code, $command)
+    {
+        $this->_log("[$code] $command");
         fwrite($this->fp, $code . " " . $command . "\r\n");
     }
 
     /**
      * Reads response from file pointer, parse it and returns response array
      * @param string $code
-     * @return Array
+     * @return array
      */
-    private function readResponse($code) {
-        $response = Array();
+    protected function _readResponse($code)
+    {
+        $response = array();
 
         $i = 1;
         // $i = 1, because 0 will be status of response
@@ -346,16 +387,22 @@ class VivOAuthIMAP {
                 }
             }
         }
+        if ($this->debug AND $response AND is_array($response)) {
+            foreach ($response as $r) {
+                $this->_log($r);
+            }
+        }
         $this->codeCounter++;
         return $response;
     }
 
     /**
      * If response is OK then removes server response status messages else returns the original response
-     * @param Array $response
-     * @return Array
+     * @param array $response
+     * @return array
      */
-    private function modifyResponse($response) {
+    protected function _modifyResponse($response)
+    {
         if ($response[0][0] == "OK") {
             $modifiedResponse = $response[1];
             return $modifiedResponse;
@@ -363,6 +410,145 @@ class VivOAuthIMAP {
         return $response;
     }
 
-}
+    public function listActiveFolders()
+    {
+        $res = $this->listFolders();
+        return array_diff($res, explode(',', 'Spam,Trash,Drafts,Outbox'));
+    }
 
-?>
+    /**
+     * Return all folders with income mail
+     * @return array
+     */
+    public function listInboxFolders(): array
+    {
+        $res = $this->listActiveFolders();
+        return array_diff($res, explode(',', 'Sent'));
+    }
+
+    /**
+     * Return all folders with sent mails
+     * @return array
+     */
+    public function listOutboxFolders(): array
+    {
+        return ['Sent'];
+    }
+
+    /**
+     * @param int $mailId
+     * @param bool $onlyHeaders
+     * @return ParseMessageX|null
+     * @throws Exception
+     */
+    public function parseMessage(int $mailId, bool $onlyHeaders = false)
+    {
+        if (!$this->isLoggedIn) throw new \Exception('Login first');
+        if ($onlyHeaders) {
+            $mails = $this->getHeaders($mailId, $mailId);
+        } else {
+            $mails = $this->getMessage($mailId);
+        }
+        if (!$mails) return null;
+        $mail = reset($mails);
+        return new ParseMessageX($mail);
+        /*
+        print_r($message->to);
+        print_r($message->body);
+        print_r($message->attachmentNames);
+
+//        $res = $message->saveAttachments($attachdir, $mail_id, false);
+        $res = $message->saveAttachments('mail_files/'.$mail_id,'', true);
+        var_dump($res); */
+    }
+
+    /**
+     * Search mails with date between $sinceDate and $beforeDate
+     * @param string $sinceDate
+     * @param string $beforeDate
+     * @return array
+     * @throws Exception
+     */
+    public function searchSince(string $sinceDate, string $beforeDate = '')
+    {
+        $date_str = date('d-M-Y', strtotime($sinceDate));
+        if ($beforeDate == $sinceDate) {
+            $command = 'SEARCH ON ' . $date_str;
+        } else {
+            $command = 'SEARCH SINCE ' . $date_str;
+            if ($beforeDate) {
+                // $beforeDate не включает в поиск, поэтому прибавляем 1 день
+                $date_str = date('d-M-Y', strtotime('+1day', strtotime($beforeDate)));
+                $command .= ' BEFORE ' . $date_str;
+            }
+        }
+        if (static::USE_UID) {
+            $command = 'UID ' . $command; // for get UID, not sequence number
+        }
+        $this->_log($command);
+        $response = $this->_writeAndRead($command);
+        //Fetch by ids got in response
+        $ids = explode(" ", trim($response[0][1]));
+        unset($ids[0]);
+        unset($ids[1]);
+        $ids = array_values($ids);
+        if (static::USE_UID) {
+            return $ids;
+        }
+        $res = [];
+        foreach ($ids as $id) {
+            $p = $this->parseMessage($id, true);
+            $res[$id] = $p->messageId;
+        }
+        return $res;
+    }
+
+    public function searchByUid(string $minUid = '1'): array
+    {
+        $command = "UID SEARCH UID $minUid:*";
+        if ($this->debug) {
+            echo $command . PHP_EOL;
+        }
+        $response = $this->_writeAndRead($command);
+        //Fetch by ids got in response
+        $ids = explode(" ", trim($response[0][1]));
+        unset($ids[0]);
+        unset($ids[1]);
+        $ids = array_values($ids);
+        return $ids;
+    }
+
+    protected function _log($message)
+    {
+        if (!$this->debug) return;
+        echo $message . PHP_EOL;
+    }
+
+    protected function _getFolderStatusParam(string $folder, string $param)
+    {
+        $response = $this->_writeAndRead("STATUS \"$folder\" ($param)");
+        $line = trim($response[0][1]);
+        $len = strlen($param);
+        return trim(strstr(substr(strstr($line, $param), $len), ')', true));
+    }
+
+    public function getUidNext(string $folder)
+    {
+        return $this->_getFolderStatusParam($folder, 'UIDNEXT');
+    }
+
+    public function getUidValidity(string $folder)
+    {
+        return $this->_getFolderStatusParam($folder, 'UIDVALIDITY');
+    }
+
+    protected function _writeAndRead(string $command, bool $modify = false)
+    {
+        $code = "A" . $this->codeCounter;
+        $this->_writeCommand($code, $command);
+        $response = $this->_readResponse($code);
+        if ($modify) $response = $this->_modifyResponse($response);
+        return $response;
+    }
+
+}
